@@ -1,0 +1,13 @@
+{
+  "Name": "Tiny BIDS MEG Test Dataset",
+  "BIDSVersion": "1.8.0",
+  "License": "CC0",
+  "Authors": ["BIDS Apps Brainstorm Test Suite"],
+  "DatasetType": "raw",
+  "GeneratedBy": {
+    "Name": "Manual creation for testing",
+    "Version": "1.0.0",
+    "Description": "Minimal test dataset for BIDS Apps Brainstorm"
+  },
+  "HowToAcknowledge": "This is a test dataset, no acknowledgment needed"
+}

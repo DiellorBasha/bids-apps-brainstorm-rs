@@ -1,0 +1,8 @@
+#!/bin/bash
+# POSIX entrypoint for BIDS Apps
+# This is the main entry point for the BIDS app
+
+set -e
+
+# Parse arguments and dispatch to appropriate implementation
+exec /app/run.sh "$@"

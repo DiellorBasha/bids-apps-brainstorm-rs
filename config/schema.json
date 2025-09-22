@@ -1,0 +1,152 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BIDS Apps Brainstorm Configuration Schema",
+  "type": "object",
+  "properties": {
+    "preprocessing": {
+      "type": "object",
+      "properties": {
+        "highpass_filter": {
+          "type": "number",
+          "minimum": 0,
+          "description": "High-pass filter frequency in Hz"
+        },
+        "lowpass_filter": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Low-pass filter frequency in Hz"
+        },
+        "notch_filter": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 0
+          },
+          "description": "Notch filter frequencies in Hz"
+        },
+        "auto_artifact_detection": {
+          "type": "boolean",
+          "description": "Enable automatic artifact detection"
+        },
+        "amplitude_threshold": {
+          "type": "number",
+          "description": "Amplitude threshold for artifact detection"
+        },
+        "gradient_threshold": {
+          "type": "number",
+          "description": "Gradient threshold for artifact detection"
+        },
+        "epoch_length": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Epoch length in seconds"
+        },
+        "epoch_overlap": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Epoch overlap fraction"
+        },
+        "baseline_correction": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Baseline correction window in seconds"
+        }
+      },
+      "required": ["highpass_filter", "lowpass_filter"]
+    },
+    "source_analysis": {
+      "type": "object",
+      "properties": {
+        "head_model": {
+          "type": "string",
+          "enum": ["single_sphere", "bem_3layer"],
+          "description": "Head model type"
+        },
+        "source_space": {
+          "type": "string",
+          "enum": ["cortex", "volume"],
+          "description": "Source space type"
+        },
+        "inverse_method": {
+          "type": "string",
+          "enum": ["dSPM", "sLORETA", "eLORETA"],
+          "description": "Inverse solution method"
+        },
+        "snr": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Signal-to-noise ratio assumption"
+        },
+        "freq_bands": {
+          "type": "object",
+          "patternProperties": {
+            "^[a-zA-Z_][a-zA-Z0-9_]*$": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          },
+          "description": "Frequency bands for analysis"
+        }
+      },
+      "required": ["head_model", "source_space", "inverse_method"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "save_intermediate": {
+          "type": "boolean",
+          "description": "Save intermediate processing files"
+        },
+        "generate_reports": {
+          "type": "boolean",
+          "description": "Generate HTML reports"
+        },
+        "export_formats": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["mat", "json", "nii"]
+          },
+          "description": "Output file formats"
+        }
+      }
+    },
+    "quality_control": {
+      "type": "object",
+      "properties": {
+        "auto_reject_trials": {
+          "type": "boolean",
+          "description": "Automatically reject bad trials"
+        },
+        "max_rejected_ratio": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Maximum fraction of trials to reject"
+        },
+        "generate_qa_plots": {
+          "type": "boolean",
+          "description": "Generate quality assurance plots"
+        }
+      }
+    }
+  },
+  "required": ["preprocessing", "source_analysis"],
+  "additionalProperties": false
+}
