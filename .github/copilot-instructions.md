@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This is a BIDS-compliant neuroimaging application for MEG/EEG preprocessing and source analysis using Brainstorm. The project follows a multi-language architecture with MATLAB as the core processing engine, containerized for reproducible execution.
+This is a BIDS-compliant neuroimaging application for MEG/EEG preprocessing and source analysis using Brainstorm. The project follows a multi-language architecture with MATLAB as the core processing engine, containerized for reproducible execution. The core MATLAB pipeline is based on Brainstorm's resting-state tutorial (https://neuroimage.usc.edu/brainstorm/Tutorials/RestingOmega) and adapted for BIDS datasets. The full MATLAB script of the tutorial is available at https://github.com/brainstorm-tools/brainstorm3/blob/master/toolbox/script/tutorial_omega.m and in the codebase at /tools/tutorial_omega.m. 
 
 ## Architecture & Key Components
 
@@ -13,11 +13,13 @@ This is a BIDS-compliant neuroimaging application for MEG/EEG preprocessing and 
 - **Flow**: `run` → `run.sh` → MATLAB `end_to_end.m` → processing pipeline
 
 ### Core MATLAB Pipeline (matlab/)
-- **`end_to_end.m`** - Main orchestrator, handles participant vs group analysis
-- **`import.m`** - BIDS dataset import and validation  
-- **`preprocess.m`** - MEG/EEG preprocessing (filtering, artifact detection, epoching)
+- **`end_to_end.m`** - Main orchestrator, handles participant vs group analysis. 
+- **`import.m`** - BIDS dataset import and validation. Use Brainstorm's tutorial_omega.m as a reference for importing BIDS datasets: sections %% ===== FILES TO IMPORT =====, %% ===== CREATE PROTOCOL =====, and %% ===== IMPORT BIDS DATASET =====.
+- **`preprocess.m`** - MEG/EEG preprocessing (filtering, artifact detection, epoching). Use Brainstorm's tutorial_omega.m as a reference for preprocessing steps: sections %% ===== PRE-PROCESSING ===== and %% ===== ARTIFACT CLEANING =====.
 - **`sensor_space.m`** - Sensor-level analysis (time-frequency, connectivity, ERPs)
-- **`source_space.m`** - Source reconstruction and analysis (forward modeling, inverse solutions)
+- **`source_space.m`** - Source reconstruction and analysis (forward modeling, inverse solutions). Use Brainstorm's tutorial_omega.m as a reference for source space analysis: sections %% ===== SOURCE ESTIMATION ===== and %% ===== POWER MAPS =====.
+
+Use Brainstorm's bst_process functions as building blocks within these modules, as is done in tutorial_omega.m.
 
 ### Configuration System (config/)
 - **YAML-based**: `default.yaml` (full processing), `minimal.yaml` (fast testing)

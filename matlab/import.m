@@ -1,13 +1,16 @@
-function import_bids_data(bids_dir, output_dir, participant_label)
-% IMPORT_BIDS_DATA Import BIDS dataset into Brainstorm database
+function sFilesRaw = import_bids_data(bids_dir, output_dir, participant_label)
+% IMPORT_BIDS_DATA Import BIDS dataset into Brainstorm database using bst_process
 %
 % Usage:
-%   import_bids_data(bids_dir, output_dir, participant_label)
+%   sFilesRaw = import_bids_data(bids_dir, output_dir, participant_label)
 %
 % Inputs:
 %   bids_dir         - Path to BIDS dataset
 %   output_dir       - Path to output directory
 %   participant_label - Specific participant to import (optional)
+%
+% Outputs:
+%   sFilesRaw        - Structure array of imported raw files
 
     fprintf('Importing BIDS data from: %s\n', bids_dir);
     
@@ -16,42 +19,30 @@ function import_bids_data(bids_dir, output_dir, participant_label)
         error('Invalid BIDS dataset structure');
     end
     
-    % Create Brainstorm database structure
-    db_dir = fullfile(output_dir, 'derivatives', 'brainstorm');
-    if ~exist(db_dir, 'dir')
-        mkdir(db_dir);
-    end
-    
     % Read dataset description
     dataset_desc_file = fullfile(bids_dir, 'dataset_description.json');
     if exist(dataset_desc_file, 'file')
         dataset_desc = read_json(dataset_desc_file);
         fprintf('Dataset: %s\n', dataset_desc.Name);
-    end
-    
-    % Get participants to import
-    if isempty(participant_label)
-        participants = get_all_participants(bids_dir);
+        protocol_name = generate_protocol_name(dataset_desc.Name, participant_label);
     else
-        participants = {participant_label};
+        protocol_name = generate_protocol_name('BIDSDataset', participant_label);
     end
     
-    % Import each participant
-    for i = 1:length(participants)
-        participant = participants{i};
-        fprintf('Importing participant: %s\n', participant);
-        
-        try
-            import_participant_data(bids_dir, db_dir, participant);
-        catch ME
-            warning('Failed to import participant %s: %s', participant, ME.message);
-        end
-    end
+    % Create Brainstorm protocol
+    create_brainstorm_protocol(protocol_name);
+    
+    % Import BIDS dataset using Brainstorm's process_import_bids
+    sFilesRaw = import_bids_with_brainstorm(bids_dir, participant_label);
     
     % Create derivatives dataset description
+    db_dir = fullfile(output_dir, 'derivatives', 'brainstorm');
+    if ~exist(db_dir, 'dir')
+        mkdir(db_dir);
+    end
     create_derivatives_description(db_dir);
     
-    fprintf('BIDS import completed.\n');
+    fprintf('BIDS import completed. Imported %d files.\n', length(sFilesRaw));
 end
 
 function valid = validate_bids_structure(bids_dir)
@@ -76,107 +67,136 @@ function valid = validate_bids_structure(bids_dir)
     end
 end
 
-function participants = get_all_participants(bids_dir)
-% Get list of all participants in BIDS dataset
+function protocol_name = generate_protocol_name(dataset_name, participant_label)
+% Generate a valid protocol name for Brainstorm
 
-    participant_dirs = dir(fullfile(bids_dir, 'sub-*'));
-    participants = {};
+    % Clean dataset name to be a valid folder name
+    protocol_name = regexprep(dataset_name, '[^a-zA-Z0-9_]', '_');
     
-    for i = 1:length(participant_dirs)
-        if participant_dirs(i).isdir
-            participants{end+1} = participant_dirs(i).name;
+    % Add participant label if specified
+    if nargin > 1 && ~isempty(participant_label)
+        protocol_name = [protocol_name '_' participant_label];
+    end
+    
+    % Ensure it starts with a letter
+    if ~isempty(protocol_name) && ~isletter(protocol_name(1))
+        protocol_name = ['Protocol_' protocol_name];
+    end
+    
+    % Limit length
+    if length(protocol_name) > 50
+        protocol_name = protocol_name(1:50);
+    end
+end
+
+function create_brainstorm_protocol(protocol_name)
+% Create or recreate Brainstorm protocol following tutorial_omega pattern
+
+    fprintf('Creating Brainstorm protocol: %s\n', protocol_name);
+    
+    % Start Brainstorm without GUI if not already running
+    if ~brainstorm('status')
+        brainstorm nogui
+    end
+    
+    % Delete existing protocol if it exists
+    gui_brainstorm('DeleteProtocol', protocol_name);
+    
+    % Create new protocol
+    % Parameters: ProtocolName, UseDefaultAnat, UseDefaultChannel
+    gui_brainstorm('CreateProtocol', protocol_name, 0, 0);
+    
+    % Start a new report
+    bst_report('Start');
+    
+    fprintf('Protocol created successfully.\n');
+end
+
+function sFilesRaw = import_bids_with_brainstorm(bids_dir, participant_label)
+% Import BIDS dataset using Brainstorm's process_import_bids
+
+    fprintf('Importing BIDS dataset using bst_process...\n');
+    
+    % Prepare BIDS import options
+    import_options = struct();
+    
+    % Set vertex count for cortical surface (following tutorial_omega)
+    import_options.nvertices = 15000;
+    
+    % Disable automatic channel alignment (can be done later)
+    import_options.channelalign = 0;
+    
+    % If specific participant is requested, we'll filter after import
+    % (process_import_bids doesn't have direct participant filtering)
+    
+    try
+        % Process: Import BIDS dataset
+        sFilesRaw = bst_process('CallProcess', 'process_import_bids', [], [], ...
+            'bidsdir',      {bids_dir, 'BIDS'}, ...
+            'nvertices',    import_options.nvertices, ...
+            'channelalign', import_options.channelalign);
+        
+        fprintf('Successfully imported %d files from BIDS dataset.\n', length(sFilesRaw));
+        
+        % If specific participant requested, filter the imported files
+        if ~isempty(participant_label)
+            sFilesRaw = filter_participant_files(sFilesRaw, participant_label);
+            fprintf('Filtered to %d files for participant: %s\n', length(sFilesRaw), participant_label);
         end
-    end
-end
-
-function import_participant_data(bids_dir, db_dir, participant)
-% Import data for a single participant
-
-    participant_dir = fullfile(bids_dir, participant);
-    
-    % Find MEG/EEG sessions
-    session_dirs = dir(fullfile(participant_dir, 'ses-*'));
-    if isempty(session_dirs)
-        % No sessions - look directly in participant directory
-        import_session_data(participant_dir, db_dir, participant, '');
-    else
-        % Multiple sessions
-        for i = 1:length(session_dirs)
-            if session_dirs(i).isdir
-                session = session_dirs(i).name;
-                session_dir = fullfile(participant_dir, session);
-                import_session_data(session_dir, db_dir, participant, session);
-            end
-        end
-    end
-end
-
-function import_session_data(session_dir, db_dir, participant, session)
-% Import MEG/EEG data for a single session
-
-    % Look for MEG data
-    meg_dir = fullfile(session_dir, 'meg');
-    if exist(meg_dir, 'dir')
-        import_meg_data(meg_dir, db_dir, participant, session);
-    end
-    
-    % Look for EEG data  
-    eeg_dir = fullfile(session_dir, 'eeg');
-    if exist(eeg_dir, 'dir')
-        import_eeg_data(eeg_dir, db_dir, participant, session);
-    end
-    
-    % Look for anatomical data
-    anat_dir = fullfile(session_dir, 'anat');
-    if exist(anat_dir, 'dir')
-        import_anat_data(anat_dir, db_dir, participant, session);
-    end
-end
-
-function import_meg_data(meg_dir, db_dir, participant, session)
-% Import MEG data files
-
-    % Find MEG files (various formats)
-    meg_files = [dir(fullfile(meg_dir, '*.ds')); ...  % CTF
-                 dir(fullfile(meg_dir, '*.fif')); ... % Neuromag
-                 dir(fullfile(meg_dir, '*.pdf'))];    % BTi
-    
-    for i = 1:length(meg_files)
-        meg_file = fullfile(meg_dir, meg_files(i).name);
-        fprintf('  Importing MEG file: %s\n', meg_files(i).name);
         
-        % TODO: Implement actual Brainstorm import
-        % This would use Brainstorm's in_data_bids function
+        % Apply post-import processing following tutorial_omega pattern
+        sFilesRaw = apply_post_import_processing(sFilesRaw);
+        
+    catch ME
+        error('Failed to import BIDS dataset: %s', ME.message);
     end
 end
 
-function import_eeg_data(eeg_dir, db_dir, participant, session)
-% Import EEG data files
+function sFilesFiltered = filter_participant_files(sFiles, participant_label)
+% Filter imported files to specific participant
 
-    % Find EEG files
-    eeg_files = [dir(fullfile(eeg_dir, '*.edf')); ...   % EDF
-                 dir(fullfile(eeg_dir, '*.vhdr')); ... % BrainVision
-                 dir(fullfile(eeg_dir, '*.set'))];     % EEGLAB
-    
-    for i = 1:length(eeg_files)
-        eeg_file = fullfile(eeg_dir, eeg_files(i).name);
-        fprintf('  Importing EEG file: %s\n', eeg_files(i).name);
-        
-        % TODO: Implement actual Brainstorm import
+    if isempty(sFiles)
+        sFilesFiltered = sFiles;
+        return;
     end
+    
+    % Get subject names from the imported files
+    subjects = {sFiles.SubjectName};
+    
+    % Find files matching the participant label
+    participant_mask = contains(subjects, participant_label);
+    
+    sFilesFiltered = sFiles(participant_mask);
 end
 
-function import_anat_data(anat_dir, db_dir, participant, session)
-% Import anatomical data
+function sFilesProcessed = apply_post_import_processing(sFilesRaw)
+% Apply post-import processing following tutorial_omega pattern
 
-    % Find T1w images
-    t1_files = dir(fullfile(anat_dir, '*T1w.nii*'));
+    fprintf('Applying post-import processing...\n');
     
-    for i = 1:length(t1_files)
-        t1_file = fullfile(anat_dir, t1_files(i).name);
-        fprintf('  Importing T1w: %s\n', t1_files(i).name);
+    if isempty(sFilesRaw)
+        sFilesProcessed = sFilesRaw;
+        return;
+    end
+    
+    try
+        % Process: Remove head points (following tutorial_omega)
+        sFilesProcessed = bst_process('CallProcess', 'process_headpoints_remove', sFilesRaw, [], ...
+            'zlimit', 0);
         
-        % TODO: Implement anatomical import
+        % Process: Refine registration (following tutorial_omega)
+        sFilesProcessed = bst_process('CallProcess', 'process_headpoints_refine', sFilesProcessed, []);
+        
+        % Process: Convert to continuous for CTF data (following tutorial_omega)
+        % This will only affect CTF datasets, others will be unchanged
+        sFilesProcessed = bst_process('CallProcess', 'process_ctf_convert', sFilesProcessed, [], ...
+            'rectype', 2);  % Continuous
+        
+        fprintf('Post-import processing completed.\n');
+        
+    catch ME
+        warning('BST:ImportPostProcessing', 'Post-import processing failed: %s. Returning original files.', ME.message);
+        sFilesProcessed = sFilesRaw;
     end
 end
 
