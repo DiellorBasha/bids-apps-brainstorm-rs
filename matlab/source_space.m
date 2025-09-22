@@ -1,441 +1,386 @@
-function source_space_analysis(bids_dir, output_dir, participant)
-% SOURCE_SPACE_ANALYSIS Source-level analysis of MEG/EEG data
-%
-% Usage:
-%   source_space_analysis(bids_dir, output_dir, participant)
+function source_space(sFilesPreprocessed, config, output_dir)
+% SOURCE_SPACE - Source-level analysis using Brainstorm bst_process functions
+% 
+% Following tutorial_omega.m patterns for source estimation and power mapping
 %
 % Inputs:
-%   bids_dir    - Path to BIDS dataset
-%   output_dir  - Path to output directory
-%   participant - Participant label (e.g., 'sub-01')
+%   sFilesPreprocessed - Brainstorm file structure from preprocessing
+%   config             - Configuration structure with source analysis parameters
+%   output_dir         - Output directory for BIDS derivatives
+%
+% Outputs:
+%   Source analysis results saved in Brainstorm database with BIDS metadata
 
-    fprintf('Running source space analysis for participant: %s\n', participant);
+    fprintf('Starting source space analysis...\n');
     
-    % Load configuration
-    config = load_source_config();
-    
-    % Find preprocessed data and anatomy
-    preproc_dir = fullfile(output_dir, 'derivatives', 'brainstorm', participant);
-    if ~exist(preproc_dir, 'dir')
-        error('Preprocessed data not found for participant: %s', participant);
+    if isempty(sFilesPreprocessed)
+        warning('No files provided for source analysis');
+        return;
     end
     
-    % Step 1: Anatomical processing
-    anatomy_results = process_anatomy(bids_dir, output_dir, participant, config);
+    % Load default configuration if not provided
+    if nargin < 2 || isempty(config)
+        config = load_source_config();
+    end
     
-    % Step 2: Forward modeling
-    forward_results = compute_forward_model(preproc_dir, anatomy_results, config);
-    
-    % Step 3: Source estimation
-    source_results = estimate_sources(preproc_dir, forward_results, config);
-    
-    % Step 4: Source-level analysis
-    analysis_results = analyze_sources(source_results, config);
-    
-    % Save all results
-    save_source_results(analysis_results, output_dir, participant);
-    
-    fprintf('Source space analysis completed for participant: %s\n', participant);
+    try
+        % Step 1: Compute noise covariance (following tutorial_omega)
+        compute_noise_covariance(sFilesPreprocessed, config.source_analysis);
+        
+        % Step 2: Compute head model (following tutorial_omega)
+        compute_head_model(sFilesPreprocessed, config.source_analysis);
+        
+        % Step 3: Compute inverse solution (following tutorial_omega)
+        sSrcFiles = compute_inverse_solution(sFilesPreprocessed, config.source_analysis);
+        
+        % Step 4: Compute source power maps (following tutorial_omega)
+        sSrcPowerMaps = compute_source_power_maps(sSrcFiles, config.source_analysis);
+        
+        % Step 5: Generate quality control outputs
+        generate_source_qc(sSrcPowerMaps, config.source_analysis);
+        
+        % Step 6: Save source analysis results with BIDS metadata
+        if nargin >= 3
+            save_source_results(sSrcPowerMaps, output_dir, config.source_analysis);
+        end
+        
+        fprintf('Source space analysis completed successfully.\n');
+        
+    catch ME
+        error('Source space analysis failed: %s', ME.message);
+    end
 end
 
-function anatomy = process_anatomy(bids_dir, output_dir, participant, config)
-% Process anatomical data for source modeling
+function compute_noise_covariance(sFiles, config)
+% Compute noise covariance using bst_process following tutorial_omega pattern
 
-    fprintf('  Processing anatomy...\n');
+    fprintf('  Computing noise covariance...\n');
     
-    % Find anatomical files
-    anat_dir = fullfile(bids_dir, participant, 'anat');
-    if ~exist(anat_dir, 'dir')
-        % Look for session-specific anatomy
-        session_dirs = dir(fullfile(bids_dir, participant, 'ses-*'));
-        if ~isempty(session_dirs)
-            anat_dir = fullfile(bids_dir, participant, session_dirs(1).name, 'anat');
+    try
+        % Select files for noise covariance computation
+        % Look for noise/baseline segments or use resting state data
+        sFilesNoise = sFiles;
+        
+        % If specific noise recordings exist, select them
+        if isfield(config, 'noise_tag') && ~isempty(config.noise_tag)
+            sFilesNoise = bst_process('CallProcess', 'process_select_tag', sFiles, [], ...
+                'tag',    config.noise_tag, ...
+                'search', 1, ...  % Search the file names
+                'select', 1);     % Select only the files with the tag
         end
+        
+        % Process: Compute covariance (noise or data) - following tutorial_omega
+        bst_process('CallProcess', 'process_noisecov', sFilesNoise, [], ...
+            'baseline',       [], ...
+            'sensortypes',    'MEG', ...
+            'target',         1, ...  % Noise covariance (covariance over baseline time window)
+            'dcoffset',       1, ...  % Block by block, to avoid effects of slow shifts in data
+            'identity',       0, ...
+            'copycond',       1, ...
+            'copysubj',       1, ...
+            'copymatch',      1, ...
+            'replacefile',    1);     % Replace
+        
+        fprintf('    Noise covariance computation completed.\n');
+        
+    catch ME
+        warning('BST:NoiseCovariance', 'Noise covariance computation failed: %s', ME.message);
     end
+end
+
+function compute_head_model(sFiles, ~)
+% Compute head model using bst_process following tutorial_omega pattern
+
+    fprintf('  Computing head model...\n');
     
-    anatomy = struct();
+    try
+        % Process: Compute head model - following tutorial_omega
+        bst_process('CallProcess', 'process_headmodel', sFiles, [], ...
+            'sourcespace', 1, ...  % Cortex surface
+            'meg',         3);     % Overlapping spheres
+        
+        fprintf('    Head model computation completed.\n');
+        
+    catch ME
+        warning('BST:HeadModel', 'Head model computation failed: %s', ME.message);
+    end
+end
+
+function sSrcFiles = compute_inverse_solution(sFiles, config)
+% Compute inverse solution using bst_process following tutorial_omega pattern
+
+    fprintf('  Computing inverse solution...\n');
     
-    if exist(anat_dir, 'dir')
-        % Find T1w image
-        t1_files = dir(fullfile(anat_dir, '*T1w.nii*'));
-        if ~isempty(t1_files)
-            t1_file = fullfile(anat_dir, t1_files(1).name);
-            fprintf('    Processing T1w: %s\n', t1_files(1).name);
-            
-            % Process anatomical image
-            anatomy = process_t1_image(t1_file, config.anatomy);
+    try
+        % Set default inverse method if not specified
+        if ~isfield(config, 'inverse_method')
+            config.inverse_method = 'dspm2018';
+        end
+        if ~isfield(config, 'snr')
+            config.snr = 3;
+        end
+        
+        % Process: Compute sources [2018] - following tutorial_omega
+        sSrcFiles = bst_process('CallProcess', 'process_inverse_2018', sFiles, [], ...
+            'output',  2, ...  % Kernel only: one per file
+            'inverse', struct(...
+                 'Comment',        ['dSPM: MEG (SNR=', num2str(config.snr), ')'], ...
+                 'InverseMethod',  'minnorm', ...
+                 'InverseMeasure', config.inverse_method, ...
+                 'SourceOrient',   {{'fixed'}}, ...
+                 'Loose',          0.2, ...
+                 'UseDepth',       1, ...
+                 'WeightExp',      0.5, ...
+                 'WeightLimit',    10, ...
+                 'NoiseMethod',    'reg', ...
+                 'NoiseReg',       0.1, ...
+                 'SnrMethod',      'fixed', ...
+                 'SnrRms',         1e-06, ...
+                 'SnrFixed',       config.snr, ...
+                 'ComputeKernel',  1, ...
+                 'DataTypes',      {{'MEG'}}));
+        
+        fprintf('    Inverse solution computation completed.\n');
+        
+    catch ME
+        error('Inverse solution computation failed: %s', ME.message);
+    end
+end
+
+function sSrcPowerMaps = compute_source_power_maps(sSrcFiles, config)
+% Compute source power maps using bst_process following tutorial_omega POWER MAPS pattern
+
+    fprintf('  Computing source power maps...\n');
+    
+    try
+        % Set default frequency bands if not specified
+        if ~isfield(config, 'freq_bands')
+            freq_bands = {
+                'delta', '2, 4', 'mean';
+                'theta', '5, 7', 'mean';
+                'alpha', '8, 12', 'mean';
+                'beta', '15, 29', 'mean';
+                'gamma1', '30, 59', 'mean';
+                'gamma2', '60, 90', 'mean'
+            };
         else
-            fprintf('    No T1w image found, using template...\n');
-            anatomy = load_template_anatomy(config.anatomy);
+            freq_bands = config.freq_bands;
         end
-    else
-        fprintf('    No anatomy directory found, using template...\n');
-        anatomy = load_template_anatomy(config.anatomy);
-    end
-    
-    anatomy.participant = participant;
-end
-
-function anatomy = process_t1_image(t1_file, config)
-% Process T1-weighted anatomical image
-
-    fprintf('      Segmenting cortical surface...\n');
-    
-    % TODO: Implement anatomical processing
-    % This would typically involve:
-    % - FreeSurfer processing
-    % - Cortical surface extraction
-    % - Head model creation
-    
-    anatomy = struct();
-    anatomy.source = 'subject_specific';
-    anatomy.t1_file = t1_file;
-    anatomy.surface_file = []; % TODO: Path to cortical surface
-    anatomy.head_model = []; % TODO: Head model data
-    anatomy.source_space = []; % TODO: Source space definition
-end
-
-function anatomy = load_template_anatomy(config)
-% Load template anatomy when subject-specific is not available
-
-    fprintf('      Loading template anatomy...\n');
-    
-    % TODO: Load from Brainstorm template or other standard template
-    
-    anatomy = struct();
-    anatomy.source = 'template';
-    anatomy.template_name = config.template_name;
-    anatomy.surface_file = []; % TODO: Template surface
-    anatomy.head_model = []; % TODO: Template head model
-    anatomy.source_space = []; % TODO: Template source space
-end
-
-function forward = compute_forward_model(preproc_dir, anatomy, config)
-% Compute forward model (leadfield matrix)
-
-    fprintf('  Computing forward model...\n');
-    
-    head_model_type = config.forward.head_model;
-    source_space_type = config.forward.source_space;
-    
-    fprintf('    Head model: %s\n', head_model_type);
-    fprintf('    Source space: %s\n', source_space_type);
-    
-    % Find preprocessed data files
-    data_files = dir(fullfile(preproc_dir, '**', '*_proc-brainstorm_*.mat'));
-    
-    forward = struct();
-    forward.head_model_type = head_model_type;
-    forward.source_space_type = source_space_type;
-    forward.anatomy = anatomy;
-    
-    for i = 1:length(data_files)
-        data_file = fullfile(data_files(i).folder, data_files(i).name);
-        fprintf('    Computing leadfield for: %s\n', data_files(i).name);
         
-        % Load preprocessed data to get sensor info
-        load(data_file, 'data');
+        % Set default time window
+        if isfield(config, 'time_window')
+            time_window = config.time_window;
+        else
+            time_window = [0, 100];  % Use all available time
+        end
         
-        % Compute leadfield matrix
-        leadfield = compute_leadfield(data, anatomy, config.forward);
+        % Step 1: Process: Power spectrum density (Welch) - following tutorial_omega
+        sSrcPsd = bst_process('CallProcess', 'process_psd', sSrcFiles, [], ...
+            'timewindow',  time_window, ...
+            'win_length',  4, ...
+            'win_overlap', 50, ...
+            'clusters',    {}, ...
+            'scoutfunc',   1, ...  % Mean
+            'edit',        struct(...
+                 'Comment',         'Power,FreqBands', ...
+                 'TimeBands',       [], ...
+                 'Freqs',           {freq_bands}, ...
+                 'ClusterFuncTime', 'none', ...
+                 'Measure',         'power', ...
+                 'Output',          'all', ...
+                 'SaveKernel',      0));
         
-        % Store with reference to data file
-        [~, base_name, ~] = fileparts(data_files(i).name);
-        forward.leadfields.(base_name) = leadfield;
-    end
-end
-
-function leadfield = compute_leadfield(data, anatomy, config)
-% Compute leadfield matrix for given data and anatomy
-
-    fprintf('      Computing leadfield matrix...\n');
-    
-    % TODO: Implement leadfield computation
-    % This involves:
-    % - Head model (sphere, BEM, FEM)
-    % - Source space definition
-    % - Sensor positions and orientations
-    % - Forward solution computation
-    
-    leadfield = struct();
-    leadfield.matrix = []; % TODO: [n_sensors x n_sources] matrix
-    leadfield.source_positions = []; % TODO: Source positions
-    leadfield.source_orientations = []; % TODO: Source orientations
-    leadfield.sensor_info = data.channels; % Copy sensor information
-end
-
-function sources = estimate_sources(preproc_dir, forward, config)
-% Estimate source activity using inverse methods
-
-    fprintf('  Estimating sources...\n');
-    
-    inverse_method = config.inverse.method;
-    snr = config.inverse.snr;
-    
-    fprintf('    Inverse method: %s\n', inverse_method);
-    fprintf('    SNR assumption: %.1f\n', snr);
-    
-    sources = struct();
-    sources.method = inverse_method;
-    sources.snr = snr;
-    
-    % Process each data file
-    leadfield_names = fieldnames(forward.leadfields);
-    for i = 1:length(leadfield_names)
-        leadfield_name = leadfield_names{i};
-        leadfield = forward.leadfields.(leadfield_name);
+        % Step 2: Process: Spectrum normalization - following tutorial_omega
+        sSrcPsdNorm = bst_process('CallProcess', 'process_tf_norm', sSrcPsd, [], ...
+            'normalize', 'relative', ...  % Relative power (divide by total power)
+            'overwrite', 0);
         
-        fprintf('    Processing: %s\n', leadfield_name);
+        % Step 3: Process: Project on default anatomy: surface - following tutorial_omega
+        sSrcPsdProj = bst_process('CallProcess', 'process_project_sources', sSrcPsdNorm, [], ...
+            'headmodeltype', 'surface');  % Cortex surface
         
-        % Load corresponding data
-        data_file = find_data_file(preproc_dir, leadfield_name);
-        load(data_file, 'data');
+        % Step 4: Process: Spatial smoothing - following tutorial_omega
+        sSrcPsdSmooth = bst_process('CallProcess', 'process_ssmooth_surfstat', sSrcPsdProj, [], ...
+            'fwhm',      3, ...     % 3mm FWHM
+            'overwrite', 1);
         
-        % Compute inverse solution
-        source_data = compute_inverse_solution(data, leadfield, config.inverse);
+        % Step 5: Process: Average: Everything - following tutorial_omega
+        sSrcPowerMaps = bst_process('CallProcess', 'process_average', sSrcPsdSmooth, [], ...
+            'avgtype',   1, ...  % Everything
+            'avg_func',  1, ...  % Arithmetic average: mean(x)
+            'weighted',  0, ...
+            'matchrows', 0, ...
+            'iszerobad', 0);
         
-        sources.data.(leadfield_name) = source_data;
+        fprintf('    Source power maps computation completed.\n');
+        
+    catch ME
+        error('Source power maps computation failed: %s', ME.message);
     end
 end
 
-function source_data = compute_inverse_solution(data, leadfield, config)
-% Compute inverse solution for source estimation
+function generate_source_qc(sSrcPowerMaps, config)
+% Generate quality control outputs for source analysis following tutorial_omega pattern
 
-    method = config.method;
-    snr = config.snr;
+    if ~isfield(config, 'generate_qa_plots') || ~config.generate_qa_plots
+        return;
+    end
     
-    fprintf('      Computing %s solution...\n', method);
+    fprintf('  Generating source space quality control outputs...\n');
     
-    % TODO: Implement inverse methods
-    switch lower(method)
-        case 'dspm'
-            source_data = compute_dspm(data, leadfield, snr);
-        case 'sloreta'
-            source_data = compute_sloreta(data, leadfield, snr);
-        case 'eloreta'
-            source_data = compute_eloreta(data, leadfield, snr);
-        case 'lcmv'
-            source_data = compute_lcmv(data, leadfield, config);
-        otherwise
-            error('Unknown inverse method: %s', method);
+    try
+        % Generate snapshots of source power maps for different frequency bands
+        for i = 1:length(sSrcPowerMaps)
+            % Screen capture of source results - following tutorial_omega
+            hFig = view_surface_data([], sSrcPowerMaps(i).FileName);
+            if ~isempty(hFig)
+                set(hFig, 'Position', [200 200 200 200]);
+                hFigContact = view_contactsheet(hFig, 'freq', 'fig');
+                bst_report('Snapshot', hFigContact, sSrcPowerMaps(i).FileName, 'Source Power Maps');
+                close([hFig, hFigContact]);
+            end
+        end
+        
+        fprintf('    Source quality control outputs generated.\n');
+        
+    catch ME
+        warning('BST:SourceQC', 'Source quality control output generation failed: %s', ME.message);
     end
 end
 
-function source_data = compute_dspm(data, leadfield, snr)
-% Compute dynamic Statistical Parametric Mapping (dSPM)
+function save_source_results(sSrcPowerMaps, output_dir, config)
+% Save source analysis results with BIDS derivatives compliance
+% Following Brainstorm's file structure and metadata
 
-    % TODO: Implement dSPM
-    source_data = struct();
-    source_data.method = 'dSPM';
-    source_data.snr = snr;
-    source_data.values = []; % TODO: Source time series
-    source_data.noise_normalized = true;
-end
-
-function source_data = compute_sloreta(data, leadfield, snr)
-% Compute standardized Low Resolution Electromagnetic Tomography (sLORETA)
-
-    % TODO: Implement sLORETA
-    source_data = struct();
-    source_data.method = 'sLORETA';
-    source_data.snr = snr;
-    source_data.values = []; % TODO: Source time series
-    source_data.noise_normalized = true;
-end
-
-function source_data = compute_eloreta(data, leadfield, snr)
-% Compute exact Low Resolution Electromagnetic Tomography (eLORETA)
-
-    % TODO: Implement eLORETA
-    source_data = struct();
-    source_data.method = 'eLORETA';
-    source_data.snr = snr;
-    source_data.values = []; % TODO: Source time series
-    source_data.noise_normalized = true;
-end
-
-function source_data = compute_lcmv(data, leadfield, config)
-% Compute Linearly Constrained Minimum Variance (LCMV) beamformer
-
-    % TODO: Implement LCMV beamformer
-    source_data = struct();
-    source_data.method = 'LCMV';
-    source_data.values = []; % TODO: Source time series
-    source_data.noise_normalized = false;
-end
-
-function results = analyze_sources(sources, config)
-% Perform analysis on estimated sources
-
-    fprintf('  Analyzing source activity...\n');
-    
-    results = struct();
-    results.sources = sources;
-    
-    % Time-frequency analysis in source space
-    if config.analysis.time_frequency
-        fprintf('    Source time-frequency analysis...\n');
-        results.source_tf = compute_source_time_frequency(sources, config.analysis);
+    if isempty(sSrcPowerMaps)
+        return;
     end
     
-    % Source connectivity
-    if config.analysis.connectivity
-        fprintf('    Source connectivity analysis...\n');
-        results.source_connectivity = compute_source_connectivity(sources, config.analysis);
+    fprintf('  Saving source analysis results...\n');
+    
+    for i = 1:length(sSrcPowerMaps)
+        try
+            % Get file information
+            [sStudy, ~] = bst_get('AnyFile', sSrcPowerMaps(i).FileName);
+            [sSubject, ~] = bst_get('Subject', sStudy.BrainStormSubject);
+            
+            % Create output filename with BIDS naming
+            [~, file_base, ~] = fileparts(sSrcPowerMaps(i).FileName);
+            output_filename = [file_base '_space-source_power.mat'];
+            
+            % Create output directory structure (BIDS derivatives)
+            if contains(sSubject.Name, 'ses-')
+                % Extract subject and session from name
+                name_parts = strsplit(sSubject.Name, {'sub-', 'ses-'});
+                sub_id = name_parts{2};
+                ses_id = strsplit(name_parts{3}, '/');
+                ses_id = ses_id{1};
+                
+                out_dir = fullfile(output_dir, 'derivatives', 'brainstorm', ...
+                    ['sub-' sub_id], ['ses-' ses_id], 'source');
+            else
+                % Subject only
+                sub_id = strrep(sSubject.Name, 'sub-', '');
+                out_dir = fullfile(output_dir, 'derivatives', 'brainstorm', ...
+                    ['sub-' sub_id], 'source');
+            end
+            
+            if ~exist(out_dir, 'dir')
+                mkdir(out_dir);
+            end
+            
+            % Create JSON sidecar
+            json_file = fullfile(out_dir, strrep(output_filename, '.mat', '.json'));
+            metadata = create_source_metadata(config);
+            write_json(json_file, metadata);
+            
+            fprintf('    Saved source analysis metadata: %s\n', json_file);
+            
+        catch ME
+            warning('BST:SaveSource', 'Failed to save metadata for file %s: %s', ...
+                sSrcPowerMaps(i).FileName, ME.message);
+        end
     end
-    
-    % Statistical analysis
-    if config.analysis.statistics
-        fprintf('    Statistical analysis...\n');
-        results.source_stats = compute_source_statistics(sources, config.analysis);
-    end
-end
-
-function tf_results = compute_source_time_frequency(sources, config)
-% Compute time-frequency analysis in source space
-
-    % TODO: Implement source-space time-frequency analysis
-    tf_results = struct();
-    tf_results.method = 'morlet';
-    tf_results.freq_bands = config.freq_bands;
-end
-
-function conn_results = compute_source_connectivity(sources, config)
-% Compute connectivity between source regions
-
-    % TODO: Implement source connectivity
-    conn_results = struct();
-    conn_results.method = 'coherence';
-    conn_results.freq_bands = config.freq_bands;
-end
-
-function stats_results = compute_source_statistics(sources, config)
-% Compute statistical analysis of source activity
-
-    % TODO: Implement source statistics
-    stats_results = struct();
-    stats_results.method = 'parametric';
-end
-
-function save_source_results(results, output_dir, participant)
-% Save source analysis results
-
-    fprintf('  Saving source results...\n');
-    
-    % Create output directory
-    out_dir = fullfile(output_dir, 'derivatives', 'brainstorm', participant, 'source');
-    if ~exist(out_dir, 'dir')
-        mkdir(out_dir);
-    end
-    
-    % Save main results
-    results_file = fullfile(out_dir, [participant '_space-source_analysis.mat']);
-    save(results_file, 'results', '-v7.3');
-    
-    % Save JSON metadata
-    json_file = fullfile(out_dir, [participant '_space-source_analysis.json']);
-    metadata = create_source_metadata(results);
-    write_json(json_file, metadata);
-    
-    % Generate visualization
-    generate_source_plots(results, out_dir, participant);
-    
-    fprintf('    Saved: %s\n', results_file);
-end
-
-function generate_source_plots(results, out_dir, participant)
-% Generate source analysis visualizations
-
-    fprintf('    Generating source plots...\n');
-    
-    % Create figures directory
-    fig_dir = fullfile(out_dir, '..', 'figures');
-    if ~exist(fig_dir, 'dir')
-        mkdir(fig_dir);
-    end
-    
-    % Source activity plot
-    fig_file = fullfile(fig_dir, [participant '_source_analysis.png']);
-    plot_source_activity(results, fig_file);
-end
-
-function plot_source_activity(results, filename)
-% Plot source activity on cortical surface
-
-    % TODO: Implement source visualization
-    % Create placeholder figure
-    figure('Visible', 'off');
-    scatter3(randn(1000,1), randn(1000,1), randn(1000,1), 20, rand(1000,1), 'filled');
-    title('Source Activity');
-    xlabel('X'); ylabel('Y'); zlabel('Z');
-    colorbar;
-    view(3);
-    saveas(gcf, filename);
-    close(gcf);
-end
-
-function data_file = find_data_file(preproc_dir, base_name)
-% Find preprocessed data file by base name
-
-    data_files = dir(fullfile(preproc_dir, '**', [base_name '.mat']));
-    if isempty(data_files)
-        error('Data file not found: %s', base_name);
-    end
-    data_file = fullfile(data_files(1).folder, data_files(1).name);
 end
 
 function config = load_source_config()
-% Load source analysis configuration
+% Load default source analysis configuration
 
     config = struct();
     
-    % Anatomy processing
-    config.anatomy.template_name = 'ICBM152';
+    % Source analysis parameters
+    config.source_analysis.noise_tag = 'task-noise';  % Tag for noise recordings
+    config.source_analysis.inverse_method = 'dspm2018';
+    config.source_analysis.snr = 3;
+    config.source_analysis.time_window = [0, 100];
+    config.source_analysis.generate_qa_plots = true;
     
-    % Forward modeling
-    config.forward.head_model = 'single_sphere'; % or 'bem_3layer'
-    config.forward.source_space = 'cortex'; % or 'volume'
-    
-    % Inverse solution
-    config.inverse.method = 'dSPM'; % or 'sLORETA', 'eLORETA', 'LCMV'
-    config.inverse.snr = 3.0;
-    
-    % Source analysis
-    config.analysis.time_frequency = true;
-    config.analysis.connectivity = true;
-    config.analysis.statistics = true;
-    config.analysis.freq_bands.delta = [1, 4];
-    config.analysis.freq_bands.theta = [4, 8];
-    config.analysis.freq_bands.alpha = [8, 13];
-    config.analysis.freq_bands.beta = [13, 30];
-    config.analysis.freq_bands.gamma = [30, 100];
-    
-    % TODO: Load from YAML configuration file
+    % Frequency bands (following tutorial_omega)
+    config.source_analysis.freq_bands = {
+        'delta', '2, 4', 'mean';
+        'theta', '5, 7', 'mean';
+        'alpha', '8, 12', 'mean';
+        'beta', '15, 29', 'mean';
+        'gamma1', '30, 59', 'mean';
+        'gamma2', '60, 90', 'mean'
+    };
 end
 
-function metadata = create_source_metadata(results)
-% Create metadata for source analysis
+function metadata = create_source_metadata(config)
+% Create source analysis metadata for JSON sidecar following BIDS derivatives
 
     metadata = struct();
-    metadata.AnalysisLevel = 'source';
-    metadata.ProcessingSoftware = 'BIDS Apps Brainstorm';
-    metadata.ProcessingVersion = '0.1.0';
-    metadata.ProcessingDate = datestr(now, 'yyyy-mm-ddTHH:MM:SS');
+    metadata.Description = 'Source-level power maps computed using Brainstorm';
+    metadata.GeneratedBy = struct( ...
+        'Name', 'bids-apps-brainstorm', ...
+        'Version', '1.0.0', ...
+        'Container', struct('Type', 'docker'));
     
-    % Add method information
-    if isfield(results.sources, 'method')
-        metadata.InverseMethod = results.sources.method;
-    end
-    if isfield(results.sources, 'snr')
-        metadata.SNR = results.sources.snr;
-    end
+    % Processing parameters
+    metadata.ProcessingSteps = {};
+    
+    metadata.ProcessingSteps{end+1} = struct( ...
+        'Name', 'NoiseCovariance', ...
+        'Parameters', struct('method', 'empirical'));
+    
+    metadata.ProcessingSteps{end+1} = struct( ...
+        'Name', 'HeadModel', ...
+        'Parameters', struct('method', 'overlapping_spheres'));
+    
+    metadata.ProcessingSteps{end+1} = struct( ...
+        'Name', 'InverseSolution', ...
+        'Parameters', struct( ...
+            'method', config.inverse_method, ...
+            'snr', config.snr));
+    
+    metadata.ProcessingSteps{end+1} = struct( ...
+        'Name', 'PowerSpectrumDensity', ...
+        'Parameters', struct( ...
+            'method', 'Welch', ...
+            'window_length', 4, ...
+            'overlap', 50));
+    
+    metadata.ProcessingSteps{end+1} = struct( ...
+        'Name', 'SpectrumNormalization', ...
+        'Parameters', struct('method', 'relative'));
+    
+    metadata.ProcessingSteps{end+1} = struct( ...
+        'Name', 'SpatialSmoothing', ...
+        'Parameters', struct('fwhm', 3));
+    
+    metadata.ProcessingDate = datestr(now, 'yyyy-mm-ddTHH:MM:SS');
 end
 
 function write_json(filename, data)
-% Write data to JSON file
+% Write data structure to JSON file
 
-    json_text = jsonencode(data, 'PrettyPrint', true);
+    json_str = jsonencode(data, 'PrettyPrint', true);
+    
     fid = fopen(filename, 'w');
-    fprintf(fid, '%s', json_text);
+    if fid == -1
+        error('Could not open file for writing: %s', filename);
+    end
+    
+    fprintf(fid, '%s', json_str);
     fclose(fid);
 end

@@ -1,8 +1,150 @@
-#!/bin/bash
-# POSIX entrypoint for BIDS Apps
-# This is the main entry point for the BIDS app
+#!/usr/bin/env bash
+set -euo pipefail
 
-set -e
+# -------- logging helpers --------
+timestamp() { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
+log() { echo "[$(timestamp)] [brainstorm-bids-app] $*" >&2; }
+die() { echo "[$(timestamp)] [brainstorm-bids-app] ERROR: $*" >&2; exit 1; }
 
-# Parse arguments and dispatch to appropriate implementation
-exec /app/run.sh "$@"
+# -------- defaults --------
+MODE="${MODE:-auto}"  # auto|mcr|matlab
+APP_BIN="${APP_BIN:-/opt/app/bin/brainstorm_bids_app}"         # Mode A compiled entry
+APP_RUNNER="${APP_RUNNER:-/opt/app/run_brainstorm_bids_app.sh}" # wrapper from mcc build
+MATLAB_CMD="${MATLAB_CMD:-matlab}"  # Mode B (matlab -batch ...)
+MCRROOT_DEFAULT="/opt/mcr/v914"     # R2023a (9.14)
+WORK_DIR="${WORK_DIR:-/work}"
+CACHE_DIR="${CACHE_DIR:-${WORK_DIR}/.cache}"
+KEEP_WORK="0"
+DEBUG="0"
+PIPELINE="full"
+ANALYSIS_LEVEL=""
+N_JOBS="${N_JOBS:-1}"
+SKIP_VALIDATOR="0"
+PARAMS_PATH=""
+PARTICIPANTS=()
+
+usage() {
+  cat <<EOF
+BIDS App — Brainstorm MEG pipeline
+Usage:
+  run \\
+    --bids_dir /bids_in \\
+    --output_dir /out \\
+    --analysis_level participant|group \\
+    --participant_label 01 [--session 01 --task rest --run 01] \\
+    --pipeline full|import|preproc|sensor|source \\
+    [--params /path/config.yaml] [--n_jobs N] [--keep_work] [--debug] [--skip_validator]
+
+Reserved args per BIDS Apps spec:
+  --bids_dir PATH            Input BIDS dataset (read-only)
+  --output_dir PATH          Output root (derivatives will be created here)
+  --analysis_level LEVEL     participant|group
+  --participant_label LABEL  May be repeated; omit for all subjects
+
+Extensions:
+  --pipeline NAME            Pipeline module: full|import|preproc|sensor|source
+  --session, --task, --run   Optional filters
+  --params PATH              YAML/JSON config file
+  --n_jobs N                 Parallel workers (default: 1)
+  --keep_work                Preserve /work (brainstorm DB) after run
+  --skip_validator           Skip bids-validator
+  --debug                    Verbose logs
+  MODE=auto|mcr|matlab       (env) Force runtime mode
+EOF
+}
+
+# -------- parse CLI --------
+[[ $# -eq 0 ]] && { usage; exit 2; }
+
+SESSION=""; TASK=""; RUN_LABEL=""
+BIDS_DIR=""; OUTPUT_DIR=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --bids_dir)           BIDS_DIR="$2"; shift 2;;
+    --output_dir)         OUTPUT_DIR="$2"; shift 2;;
+    --analysis_level)     ANALYSIS_LEVEL="$2"; shift 2;;
+    --participant_label)  PARTICIPANTS+=("$2"); shift 2;;
+    --session)            SESSION="$2"; shift 2;;
+    --task)               TASK="$2"; shift 2;;
+    --run)                RUN_LABEL="$2"; shift 2;;
+    --pipeline)           PIPELINE="$2"; shift 2;;
+    --params)             PARAMS_PATH="$2"; shift 2;;
+    --n_jobs)             N_JOBS="$2"; shift 2;;
+    --keep_work)          KEEP_WORK="1"; shift 1;;
+    --skip_validator)     SKIP_VALIDATOR="1"; shift 1;;
+    --debug)              DEBUG="1"; set -x; shift 1;;
+    -h|--help)            usage; exit 0;;
+    *) die "Unknown argument: $1";;
+  esac
+done
+
+[[ -z "${BIDS_DIR}" ]]        && die "--bids_dir is required"
+[[ -z "${OUTPUT_DIR}" ]]      && die "--output_dir is required"
+[[ -z "${ANALYSIS_LEVEL}" ]]  && die "--analysis_level is required"
+[[ "${ANALYSIS_LEVEL}" =~ ^(participant|group)$ ]] || die "Invalid --analysis_level"
+[[ "${PIPELINE}" =~ ^(full|import|preproc|sensor|source)$ ]] || die "Invalid --pipeline"
+
+mkdir -p "${WORK_DIR}" "${CACHE_DIR}" "${OUTPUT_DIR}"
+chmod -R a+rwx "${WORK_DIR}" "${CACHE_DIR}" || true
+
+# -------- validator --------
+if [[ "${SKIP_VALIDATOR}" != "1" ]]; then
+  if command -v tools/bids_validate.sh >/dev/null 2>&1; then
+    log "Running BIDS validator..."
+    tools/bids_validate.sh "${BIDS_DIR}"
+  else
+    log "BIDS validator not found; skipping (use --skip_validator to silence)."
+  fi
+fi
+
+# -------- build args.json for MATLAB/MCR --------
+ARG_JSON="${WORK_DIR}/args.json"
+cat > "${ARG_JSON}" <<JSON
+{
+  "bids_dir": "${BIDS_DIR}",
+  "output_dir": "${OUTPUT_DIR}",
+  "analysis_level": "${ANALYSIS_LEVEL}",
+  "participant_label": [$(printf '"%s",' "${PARTICIPANTS[@]}" | sed 's/,$//')],
+  "session": "${SESSION}",
+  "task": "${TASK}",
+  "run": "${RUN_LABEL}",
+  "pipeline": "${PIPELINE}",
+  "params": "${PARAMS_PATH}",
+  "n_jobs": ${N_JOBS},
+  "debug": ${DEBUG},
+  "keep_work": ${KEEP_WORK},
+  "work_dir": "${WORK_DIR}",
+  "cache_dir": "${CACHE_DIR}"
+}
+JSON
+
+# -------- choose mode --------
+if [[ "${MODE}" == "auto" ]]; then
+  if [[ -x "${APP_RUNNER}" ]]; then MODE="mcr"; else MODE="matlab"; fi
+fi
+log "Runtime mode: ${MODE}"
+
+# -------- dispatch --------
+if [[ "${MODE}" == "mcr" ]]; then
+  : "${MCRROOT:=${MCRROOT_DEFAULT}}"
+  [[ -x "${APP_RUNNER}" ]] || die "Compiled runner not found: ${APP_RUNNER}"
+  log "Launching compiled app with MCR at ${MCRROOT}"
+  "${APP_RUNNER}" "${MCRROOT}" --args-file "${ARG_JSON}"
+else
+  # Mode B: MATLAB in-container (license server needed)
+  : "${MATLAB_STARTUP:=""}"
+  MATLAB_SCRIPT="try; addpath('/opt/brainstorm3'); addpath(genpath('/opt/app/matlab')); \
+    exit_code = utils_bst('entry', '${ARG_JSON}'); \
+    exit(exit_code); catch ME; disp(getReport(ME)); exit(99); end"
+  log "Launching MATLAB: -batch workflow"
+  "${MATLAB_CMD}" -batch "${MATLAB_SCRIPT}"
+fi
+
+# -------- cleanup --------
+if [[ "${KEEP_WORK}" != "1" ]]; then
+  log "Cleaning work dir..."
+  rm -rf "${WORK_DIR:?}/"*
+fi
+
+log "Done."

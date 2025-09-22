@@ -29,28 +29,32 @@ This document describes all available parameters for BIDS Apps Brainstorm.
 - **Default**: Process all participants
 
 ## Configuration Parameters
-
-### Preprocessing Options
-- **Filtering**: Configurable high-pass and low-pass filters
-- **Artifact rejection**: Automatic and manual artifact detection
-- **Epoching**: Event-based epoch extraction
-
-### Source Analysis Options
-- **Forward modeling**: Head model computation
-- **Inverse solutions**: Multiple source estimation methods
-- **Time-frequency analysis**: Power and connectivity metrics
-
-## Examples
-
-```bash
-# Process single participant
-./run /data /output participant --participant_label sub-01
-
-# Process all participants
-./run /data /output participant
-
-# Group-level analysis
-./run /data /output group
+Provide a YAML/JSON with `--params`, outlining input parameters for the pipeline.
+Keys mirror MATLAB structs. 
+#### Example `--params`
+```yaml
+preproc:
+  notch: [60, 120, 180]   # Hz (example)
+  bandpass: [1, 150]      # Hz
+  ssp:
+    ecg: true
+    eog: true
+sensor:
+  psd:
+    welch_win: 2.0
+    welch_ovlp: 0.5
+  tfr:
+    method: "morlet"
+    fmin: 1
+    fmax: 40
+source:
+  inverse:
+    method: "minnorm-2018"
+    snr: 3
+    loose: 0.2
+    depth_weighting: 0.8
+general:
+  headmodel: "bem"  # or "spherical"
 ```
 
 ## Configuration Files
