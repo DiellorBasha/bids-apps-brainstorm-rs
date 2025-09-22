@@ -1,0 +1,40 @@
+# Minimal configuration for fast testing and development
+# Reduced processing for quick turnaround
+
+preprocessing:
+  # Basic filtering only
+  highpass_filter: 1.0
+  lowpass_filter: 40.0
+  notch_filter: []  # Skip notch filtering
+  
+  # Minimal artifact rejection
+  auto_artifact_detection: false
+  amplitude_threshold: 200e-12  # More lenient
+  
+  # Short epochs for testing
+  epoch_length: 1.0
+  epoch_overlap: 0.0
+  baseline_correction: null  # Skip baseline correction
+
+source_analysis:
+  # Fast forward modeling
+  head_model: "single_sphere"
+  source_space: "cortex"
+  
+  # Quick inverse solution
+  inverse_method: "dSPM"
+  snr: 1.0  # Lower SNR assumption for speed
+  
+  # Limited frequency analysis
+  freq_bands:
+    alpha: [8, 13]
+    beta: [13, 30]
+
+output:
+  save_intermediate: false  # Skip intermediate files
+  generate_reports: false   # Skip report generation
+  export_formats: ["mat"]   # MAT only
+  
+quality_control:
+  auto_reject_trials: false
+  generate_qa_plots: false  # Skip QA plots

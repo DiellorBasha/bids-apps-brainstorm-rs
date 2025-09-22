@@ -1,0 +1,45 @@
+# Default configuration for BIDS Apps Brainstorm
+# All processing parameters with standard defaults
+
+preprocessing:
+  # Filtering parameters
+  highpass_filter: 1.0        # Hz
+  lowpass_filter: 100.0       # Hz
+  notch_filter: [50, 100]     # Hz - power line noise
+  
+  # Artifact rejection
+  auto_artifact_detection: true
+  amplitude_threshold: 150e-12  # T for MEG, V for EEG
+  gradient_threshold: 3000e-12  # T/m for MEG
+  
+  # Epoching
+  epoch_length: 2.0           # seconds
+  epoch_overlap: 0.5          # fraction
+  baseline_correction: [-0.2, 0]  # seconds relative to event
+
+source_analysis:
+  # Forward modeling
+  head_model: "single_sphere"  # or "bem_3layer"
+  source_space: "cortex"      # or "volume"
+  
+  # Source estimation
+  inverse_method: "dSPM"      # or "sLORETA", "eLORETA"
+  snr: 3.0                    # signal-to-noise ratio assumption
+  
+  # Time-frequency analysis
+  freq_bands:
+    delta: [1, 4]
+    theta: [4, 8] 
+    alpha: [8, 13]
+    beta: [13, 30]
+    gamma: [30, 100]
+
+output:
+  save_intermediate: true
+  generate_reports: true
+  export_formats: ["mat", "json"]
+  
+quality_control:
+  auto_reject_trials: true
+  max_rejected_ratio: 0.3     # maximum fraction of trials to reject
+  generate_qa_plots: true

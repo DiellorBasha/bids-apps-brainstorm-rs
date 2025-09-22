@@ -1,0 +1,14 @@
+# Expected output files after processing
+# This file lists the expected outputs for validation testing
+
+derivatives/brainstorm/dataset_description.json
+derivatives/brainstorm/sub-01/ses-01/meg/sub-01_ses-01_task-rest_run-01_proc-brainstorm_meg.mat
+derivatives/brainstorm/sub-01/ses-01/meg/sub-01_ses-01_task-rest_run-01_proc-brainstorm_meg.json
+derivatives/brainstorm/sub-01/sensor/sub-01_ses-01_task-rest_run-01_space-sensor_timefreq.mat
+derivatives/brainstorm/sub-01/sensor/sub-01_ses-01_task-rest_run-01_space-sensor_timefreq.json
+derivatives/brainstorm/sub-01/source/sub-01_space-source_analysis.mat
+derivatives/brainstorm/sub-01/source/sub-01_space-source_analysis.json
+derivatives/brainstorm/sub-01/figures/sub-01_preprocessing_summary.png
+derivatives/brainstorm/sub-01/figures/sub-01_source_analysis.png
+logs/brainstorm_*.log
+logs/participant_reports/sub-01_report.html
