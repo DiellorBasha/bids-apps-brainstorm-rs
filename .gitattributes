@@ -1,0 +1,11 @@
+# Git LFS configuration for large files
+# Track large zip files that might contain Brainstorm binaries or data
+*.zip filter=lfs diff=lfs merge=lfs -text
+# Track other potentially large binary files
+*.tar.gz filter=lfs diff=lfs merge=lfs -text
+*.tgz filter=lfs diff=lfs merge=lfs -text
+*.bin filter=lfs diff=lfs merge=lfs -text
+# Track large data files that might be added for testing
+*.mat filter=lfs diff=lfs merge=lfs -text
+*.fif filter=lfs diff=lfs merge=lfs -text
+*.ds filter=lfs diff=lfs merge=lfs -text
